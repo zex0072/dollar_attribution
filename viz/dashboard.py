@@ -7,6 +7,7 @@ controls let the user drill into any time window or model parameter.
 
 import sys
 import os
+import io
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
@@ -346,7 +347,7 @@ def load_data(_):
 def _load(data, lookback_idx=2):
     if not data:
         return None
-    df = pd.read_json(data, orient="split")
+    df = pd.read_json(io.StringIO(data), orient="split")
     df.index = pd.to_datetime(df.index)
     df = df.sort_index()
     n = LOOKBACK_OPTIONS[int(lookback_idx)]
