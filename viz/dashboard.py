@@ -466,13 +466,27 @@ def _build_judgment_panel(df: pd.DataFrame, corr_window: int = 20, dir_window: i
     ois_dir  = _dir("fra_ois_proxy")
     gold_dir = _dir("gold")
 
-    # Signal: active when correlation supports the structural story AND recent direction matches
+    # Score each signal: abs(corr) when direction pattern matches, else 0
+    def _score(dir_ok, corr, positive_corr=True):
+        if np.isnan(corr):
+            return 0.0
+        aligned = corr > 0 if positive_corr else corr < 0
+        return abs(corr) if (dir_ok and aligned) else 0.0
+
+    yld_score  = _score(dxy_dir > 0 and yld_dir > 0,  yld_cor,  positive_corr=True)
+    vix_score  = _score(dxy_dir > 0 and vix_dir > 0,  vix_cor,  positive_corr=True)
+    ois_score  = _score(dxy_dir > 0 and ois_dir > 0,  ois_cor,  positive_corr=True)
+    gold_score = _score(dxy_dir < 0 and gold_dir > 0, gold_cor, positive_corr=False)
+
+    scores = [yld_score, vix_score, ois_score, gold_score]
+    best_idx = int(np.argmax(scores)) if max(scores) > 0 else -1
+
     signals = [
         {
             "label":  "利率驱动",
             "desc":   "DXY↑ + Yield↑",
             "detail": "加息预期推升美元",
-            "active": dxy_dir > 0 and yld_dir > 0 and not np.isnan(yld_cor) and yld_cor > 0.2,
+            "active": best_idx == 0,
             "corr":   yld_cor,
             "corr_label": "DXY/10Y Corr",
         },
@@ -480,7 +494,7 @@ def _build_judgment_panel(df: pd.DataFrame, corr_window: int = 20, dir_window: i
             "label":  "避险驱动",
             "desc":   "DXY↑ + VIX↑",
             "detail": "恐慌情绪推升避险买盘",
-            "active": dxy_dir > 0 and vix_dir > 0 and not np.isnan(vix_cor) and vix_cor > 0.2,
+            "active": best_idx == 1,
             "corr":   vix_cor,
             "corr_label": "DXY/VIX Corr",
         },
@@ -488,7 +502,7 @@ def _build_judgment_panel(df: pd.DataFrame, corr_window: int = 20, dir_window: i
             "label":  "流动性紧张",
             "desc":   "DXY↑ + SOFR↑",
             "detail": "融资压力导致美元挤压",
-            "active": dxy_dir > 0 and ois_dir > 0 and not np.isnan(ois_cor) and ois_cor > 0.15,
+            "active": best_idx == 2,
             "corr":   ois_cor,
             "corr_label": "DXY/FRA-OIS Corr",
         },
@@ -496,7 +510,7 @@ def _build_judgment_panel(df: pd.DataFrame, corr_window: int = 20, dir_window: i
             "label":  "宽松预期",
             "desc":   "DXY↓ + 黄金↑",
             "detail": "实际利率下行，美元走弱",
-            "active": dxy_dir < 0 and gold_dir > 0 and not np.isnan(gold_cor) and gold_cor < -0.2,
+            "active": best_idx == 3,
             "corr":   gold_cor,
             "corr_label": "DXY/Gold Corr",
         },
