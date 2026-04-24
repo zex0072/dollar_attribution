@@ -16,6 +16,13 @@ import logging
 # Ensure package imports resolve correctly
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Load .env from project root (no-op if python-dotenv not installed or file absent)
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+except ImportError:
+    pass
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-7s  %(name)s — %(message)s",
