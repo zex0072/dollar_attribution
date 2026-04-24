@@ -179,6 +179,9 @@ app.layout = dbc.Container(fluid=True, style={
         padding="10px 8px",
     ),
 
+    # Judgment panel
+    _card(html.Div(id="judgment-panel"), padding="8px 16px"),
+
     # Global controls — lookback only; OLS window lives inside 宏观因子 tab
     _card(
         dbc.Row([
@@ -377,13 +380,14 @@ def update_lookback_hint(lb):
      Output("kpi-gold", "children"), Output("kpi-gold-chg", "children"),
      Output("kpi-vix",  "children"), Output("kpi-vix-chg",  "children"),
      Output("regime-badge", "children"),
-     Output("last-update", "children")],
+     Output("last-update", "children"),
+     Output("judgment-panel", "children")],
     Input("store-data", "data"),
 )
 def update_kpis(data):
     from datetime import datetime
     if not data:
-        return *["—"] * 12, "", "数据加载中…"
+        return *["—"] * 12, "", "数据加载中…", ""
 
     df = _load(data, lookback_idx=len(LOOKBACK_OPTIONS) - 1)   # always use full history for KPIs
 
@@ -419,9 +423,132 @@ def update_kpis(data):
     except Exception:
         badge = dbc.Badge("计算中…", color="secondary", pill=True)
 
+    judgment = _build_judgment_panel(df)
+
     ts = f"更新于 {datetime.now().strftime('%Y-%m-%d  %H:%M:%S')}"
     return (dxy_v, dxy_c, eur_v, eur_c, ty10_v, ty10_c,
-            ty2_v, ty2_c, gold_v, gold_c, vix_v, vix_c, badge, ts)
+            ty2_v, ty2_c, gold_v, gold_c, vix_v, vix_c, badge, ts, judgment)
+
+
+def _build_judgment_panel(df: pd.DataFrame, corr_window: int = 20, dir_window: int = 5):
+    """
+    Compute 4 structural USD driver signals using recent correlations + directions.
+    Returns a Dash row of compact signal cards.
+    """
+    def _corr(col):
+        try:
+            s1 = df["dxy"].pct_change().dropna()
+            s2 = df[col].pct_change().dropna() if col not in ("ty10", "ty2_use", "fra_ois_proxy") \
+                 else df[col].diff().dropna()
+            aligned = pd.concat([s1, s2], axis=1).dropna().tail(corr_window)
+            if len(aligned) < 10:
+                return np.nan
+            return float(aligned.iloc[:, 0].corr(aligned.iloc[:, 1]))
+        except Exception:
+            return np.nan
+
+    def _dir(col):
+        """Return +1 / -1 based on net 5-day change."""
+        try:
+            s = df[col].dropna().tail(dir_window + 1)
+            return 1 if s.iloc[-1] > s.iloc[0] else -1
+        except Exception:
+            return 0
+
+    dxy_dir  = _dir("dxy")
+    yld_cor  = _corr("ty10")
+    vix_cor  = _corr("vix")
+    ois_cor  = _corr("fra_ois_proxy")
+    gold_cor = _corr("gold")
+
+    yld_dir  = _dir("ty10")
+    vix_dir  = _dir("vix")
+    ois_dir  = _dir("fra_ois_proxy")
+    gold_dir = _dir("gold")
+
+    # Signal: active when correlation supports the structural story AND recent direction matches
+    signals = [
+        {
+            "label":  "利率驱动",
+            "desc":   "DXY↑ + Yield↑",
+            "detail": "加息预期推升美元",
+            "active": dxy_dir > 0 and yld_dir > 0 and not np.isnan(yld_cor) and yld_cor > 0.2,
+            "corr":   yld_cor,
+            "corr_label": "DXY/10Y Corr",
+        },
+        {
+            "label":  "避险驱动",
+            "desc":   "DXY↑ + VIX↑",
+            "detail": "恐慌情绪推升避险买盘",
+            "active": dxy_dir > 0 and vix_dir > 0 and not np.isnan(vix_cor) and vix_cor > 0.2,
+            "corr":   vix_cor,
+            "corr_label": "DXY/VIX Corr",
+        },
+        {
+            "label":  "流动性紧张",
+            "desc":   "DXY↑ + SOFR↑",
+            "detail": "融资压力导致美元挤压",
+            "active": dxy_dir > 0 and ois_dir > 0 and not np.isnan(ois_cor) and ois_cor > 0.15,
+            "corr":   ois_cor,
+            "corr_label": "DXY/FRA-OIS Corr",
+        },
+        {
+            "label":  "宽松预期",
+            "desc":   "DXY↓ + 黄金↑",
+            "detail": "实际利率下行，美元走弱",
+            "active": dxy_dir < 0 and gold_dir > 0 and not np.isnan(gold_cor) and gold_cor < -0.2,
+            "corr":   gold_cor,
+            "corr_label": "DXY/Gold Corr",
+        },
+    ]
+
+    def _card_signal(s):
+        active = s["active"]
+        border_color = POSITIVE if active else BORDER
+        label_color  = POSITIVE if active else MUTED
+        indicator    = "●" if active else "○"
+        ind_color    = POSITIVE if active else MUTED
+        corr_val     = f"{s['corr']:.2f}" if not np.isnan(s["corr"]) else "n/a"
+
+        return html.Div([
+            html.Div([
+                html.Span(indicator, style={"color": ind_color, "marginRight": "5px",
+                                            "fontSize": "14px"}),
+                html.Span(s["label"], style={"color": label_color, "fontWeight": 700,
+                                             "fontSize": "12px"}),
+            ]),
+            html.Div(s["desc"], style={"color": TEXT, "fontSize": "11px",
+                                       "fontFamily": "monospace", "marginTop": "2px"}),
+            html.Div(s["detail"], style={"color": MUTED, "fontSize": "10px",
+                                         "marginTop": "1px"}),
+            html.Div([
+                html.Span(s["corr_label"] + ": ",
+                          style={"color": MUTED, "fontSize": "10px"}),
+                html.Span(corr_val,
+                          style={"color": POSITIVE if (not np.isnan(s["corr"]) and
+                                  ((s["corr"] > 0 and s["label"] != "宽松预期") or
+                                   (s["corr"] < 0 and s["label"] == "宽松预期")))
+                                 else MUTED,
+                                 "fontSize": "10px", "fontFamily": "monospace"}),
+            ], style={"marginTop": "3px"}),
+        ], style={
+            "padding": "6px 14px",
+            "borderLeft": f"3px solid {border_color}",
+            "borderRadius": "4px",
+            "backgroundColor": "rgba(255,255,255,0.02)",
+            "flex": "1",
+            "minWidth": "160px",
+        })
+
+    return html.Div([
+        html.Div("驱动判断矩阵", style={"color": MUTED, "fontSize": "10px",
+                                         "textTransform": "uppercase",
+                                         "letterSpacing": "1px", "marginBottom": "6px"}),
+        html.Div([_card_signal(s) for s in signals],
+                 style={"display": "flex", "gap": "10px", "flexWrap": "wrap"}),
+        html.Div(f"基于近 {corr_window} 日相关性 + 近 {dir_window} 日方向",
+                 style={"color": MUTED, "fontSize": "10px", "marginTop": "5px"}),
+    ])
 
 
 # ── Tab 1: DXY走势 ────────────────────────────────────────────────────────────
