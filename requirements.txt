@@ -1,0 +1,9 @@
+pandas>=2.0
+numpy>=1.24
+yfinance>=0.2
+plotly>=5.18
+dash>=2.14
+dash-bootstrap-components>=1.5
+scipy>=1.11
+statsmodels>=0.14
+fredapi>=0.5        # optional — only needed with FRED_API_KEY
