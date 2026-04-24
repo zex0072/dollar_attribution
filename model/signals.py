@@ -3,13 +3,16 @@ Market regime classification and signal generation.
 Reads from attribution outputs to label the current DXY environment.
 """
 
+from typing import Optional
+
 import pandas as pd
 import numpy as np
 
 from model.attribution import factor_share, vix_z_score, dxy_z_score
 
 
-def classify_regime(df: pd.DataFrame, contributions: pd.DataFrame) -> dict:
+def classify_regime(df: pd.DataFrame, contributions: pd.DataFrame,
+                    ccy_attr: Optional[pd.DataFrame] = None) -> dict:
     """
     Return a dict with:
       regime      : dominant label string
@@ -27,7 +30,7 @@ def classify_regime(df: pd.DataFrame, contributions: pd.DataFrame) -> dict:
         "risk_on":        vz < -1.0,
         "rate_driven":    shares.get("Δ 2Y Yield", 0) + shares.get("Δ Yield Curve", 0) > 0.40,
         "funding_stress": shares.get("Δ Funding Stress", 0) > 0.25,
-        "eur_dominated":  _eur_share(contributions) > 0.55,
+        "eur_dominated":  _eur_share(ccy_attr) > 0.55,
         "gold_driven":    shares.get("Δ ln(Gold)", 0) > 0.25,
         "strong_usd":     dz > 1.0,
         "weak_usd":       dz < -1.0,
@@ -72,11 +75,19 @@ def classify_regime(df: pd.DataFrame, contributions: pd.DataFrame) -> dict:
     }
 
 
-def _eur_share(contributions: pd.DataFrame, window: int = 10) -> float:
-    """EUR's share of absolute currency attribution over last N days."""
-    # contributions here are macro-factor based; we can't directly get EUR share
-    # unless the caller passes currency_attr. Return 0 as safe default.
-    return 0.0
+def _eur_share(ccy_attr: Optional[pd.DataFrame], window: int = 10) -> float:
+    """
+    EUR's share of total absolute currency attribution over last N days.
+    Requires the geometric currency attribution DataFrame (from currency_attribution()).
+    Returns 0 if data unavailable.
+    """
+    if ccy_attr is None or "EUR" not in ccy_attr.columns:
+        return 0.0
+    recent = ccy_attr.tail(window).abs()
+    total  = recent.sum(axis=1).sum()
+    if total == 0:
+        return 0.0
+    return float(recent["EUR"].sum() / total)
 
 
 def momentum_signals(df: pd.DataFrame) -> pd.DataFrame:

@@ -178,22 +178,22 @@ app.layout = dbc.Container(fluid=True, style={
         padding="10px 8px",
     ),
 
-    # Global controls
+    # Global controls — lookback only; OLS window lives inside 宏观因子 tab
     _card(
         dbc.Row([
             dbc.Col([
-                _label("回看周期（交易日）"),
+                _label("回看周期（交易日）— 对所有图表生效"),
                 dcc.Slider(
                     id="global-lookback", min=0,
                     max=len(LOOKBACK_OPTIONS) - 1, step=1, value=2,
                     marks={i: str(v) for i, v in enumerate(LOOKBACK_OPTIONS)},
                     tooltip={"always_visible": False},
                 ),
-            ], width=5),
-            dbc.Col([
-                _label("OLS滚动窗口（因子归因）"),
-                _radio("ols-window", [20, 40, 60, 90], 60),
-            ], width=5),
+            ], width=6),
+            dbc.Col(html.Div(id="lookback-hint",
+                             style={"color": MUTED, "fontSize": "11px",
+                                    "marginTop": "18px"}),
+                    width=6),
         ], align="center"),
         padding="12px 20px",
     ),
@@ -242,12 +242,17 @@ app.layout = dbc.Container(fluid=True, style={
                         dbc.Row([
                             dbc.Col([_label("图表类型"),
                                      _radio("factor-type", ["柱状图", "折线图"], "柱状图")],
-                                    width=4),
+                                    width=3),
                             dbc.Col([_label("视图"),
                                      _radio("factor-view",
                                             ["归因贡献", "滚动Beta", "R²"], "归因贡献")],
-                                    width=5),
-                        ], className="mb-3"),
+                                    width=4),
+                            dbc.Col([_label("OLS 滚动窗口（交易日）"),
+                                     _radio("ols-window", [20, 40, 60, 90], 60)],
+                                    width=4),
+                        ], className="mb-2"),
+                        html.Div(id="ols-warning",
+                                 style={"marginBottom": "8px", "fontSize": "12px"}),
                         dcc.Graph(id="chart-factor"),
                     )),
 
@@ -348,6 +353,19 @@ def _load(data, lookback_idx=2):
     return df.tail(n)
 
 
+def _n(lb):
+    """Return the number of days for the given lookback index."""
+    return LOOKBACK_OPTIONS[int(lb)]
+
+
+# ── lookback hint ─────────────────────────────────────────────────────────────
+
+@app.callback(Output("lookback-hint", "children"), Input("global-lookback", "value"))
+def update_lookback_hint(lb):
+    n = _n(lb)
+    return f"当前所有图表显示最近 {n} 交易日数据"
+
+
 # ── KPI bar ───────────────────────────────────────────────────────────────────
 
 @app.callback(
@@ -388,8 +406,9 @@ def update_kpis(data):
     vix_v,  vix_c  = _kpi("vix",      2)
 
     try:
-        contribs, _, _ = rolling_ols_attribution(df)
-        sig = classify_regime(df, contribs)
+        ccy_attr         = currency_attribution(df)
+        contribs, _, _   = rolling_ols_attribution(df)
+        sig = classify_regime(df, contribs, ccy_attr=ccy_attr)
         r   = sig["regime"]
         bc  = NEGATIVE if any(w in r for w in ("Stress", "Risk-Off")) else (
               POSITIVE if "Strength" in r else WARNING)
@@ -442,7 +461,8 @@ def chart_dxy(data, lb, ma_mode, bb_mode):
 
     _style(fig)
     fig.update_layout(
-        title=dict(text="DXY 美元指数走势", font=dict(color=MUTED, size=13)),
+        title=dict(text=f"DXY 美元指数走势（最近 {_n(lb)} 交易日）",
+                   font=dict(color=MUTED, size=13)),
         yaxis_title="DXY",
     )
     return fig
@@ -485,7 +505,7 @@ def chart_ccy(data, lb, chart_type, overlay):
 
     _style(fig)
     fig.update_layout(
-        title=dict(text="货币贡献分解（几何权重，单位：log-pts × 100）",
+        title=dict(text=f"货币贡献分解（几何权重，最近 {_n(lb)} 日，单位：log-pts × 100）",
                    font=dict(color=MUTED, size=13)),
         yaxis_title="贡献（log-pts × 100）",
     )
@@ -513,7 +533,7 @@ def chart_ccy(data, lb, chart_type, overlay):
 # ── Tab 3: 宏观因子归因 ───────────────────────────────────────────────────────
 
 @app.callback(
-    Output("chart-factor", "figure"),
+    [Output("chart-factor", "figure"), Output("ols-warning", "children")],
     [Input("store-data", "data"), Input("global-lookback", "value"),
      Input("ols-window", "value"), Input("factor-type", "value"),
      Input("factor-view", "value")],
@@ -522,12 +542,29 @@ def chart_factor(data, lb, ols_win, chart_type, view):
     df  = _load(data, lb)
     fig = go.Figure()
     if df is None:
-        return fig
+        return fig, ""
+
+    n_days      = _n(lb)
+    requested   = int(ols_win)
+    # Cap OLS window to at most half the available rows; floor at 10
+    effective   = min(requested, max(n_days // 2, 10))
+
+    if effective < requested:
+        warn = html.Span(
+            f"⚠️  回看周期 {n_days} 日 < OLS窗口 {requested} 日，"
+            f"已自动截断至 {effective} 日。如需完整窗口请将回看周期调至 {requested*2}+ 日。",
+            style={"color": WARNING},
+        )
+    else:
+        warn = html.Span(
+            f"✅  OLS窗口 {effective} 日，回看 {n_days} 日",
+            style={"color": MUTED},
+        )
 
     try:
-        contribs, betas, r2 = rolling_ols_attribution(df, window=int(ols_win))
+        contribs, betas, r2 = rolling_ols_attribution(df, window=effective)
     except Exception:
-        return fig
+        return fig, warn
 
     if view == "归因贡献":
         vals = contribs.fillna(0) * 100
@@ -547,8 +584,9 @@ def chart_factor(data, lb, ols_win, chart_type, view):
         fig.add_trace(go.Scatter(x=dxy_lr.index, y=dxy_lr, name="Δln(DXY)",
                                  line=dict(color="white", width=1.8)))
         fig.update_layout(
-            title=dict(text=f"宏观因子归因（滚动OLS {ols_win}日）",
-                       font=dict(color=MUTED, size=13)),
+            title=dict(
+                text=f"宏观因子归因（OLS {effective}日窗口，最近 {n_days} 日）",
+                font=dict(color=MUTED, size=13)),
             yaxis_title="贡献（log-pts × 100）",
         )
 
@@ -561,8 +599,9 @@ def chart_factor(data, lb, ols_win, chart_type, view):
                                                width=1.5)))
         fig.add_hline(y=0, line_color="#444", line_dash="dot")
         fig.update_layout(
-            title=dict(text=f"因子 Beta 系数（{ols_win}日滚动）",
-                       font=dict(color=MUTED, size=13)),
+            title=dict(
+                text=f"因子 Beta 系数（{effective}日滚动，最近 {n_days} 日）",
+                font=dict(color=MUTED, size=13)),
             yaxis_title="Beta 系数",
         )
 
@@ -575,13 +614,14 @@ def chart_factor(data, lb, ols_win, chart_type, view):
         fig.add_hline(y=0.3, line_color=WARNING, line_dash="dash",
                       annotation_text="R²=0.30", annotation_font_color=WARNING)
         fig.update_layout(
-            title=dict(text=f"模型拟合度 R²（{ols_win}日滚动）",
-                       font=dict(color=MUTED, size=13)),
+            title=dict(
+                text=f"模型拟合度 R²（{effective}日滚动，最近 {n_days} 日）",
+                font=dict(color=MUTED, size=13)),
             yaxis=dict(range=[0, 1], gridcolor="#1f2937"),
         )
 
     _style(fig)
-    return fig
+    return fig, warn
 
 
 # ── Tab 4: 收益率曲线 ─────────────────────────────────────────────────────────
@@ -627,7 +667,7 @@ def chart_yields(data, lb, series):
     fig.update_xaxes(gridcolor="#1f2937")
     _style(fig)
     fig.update_layout(
-        title=dict(text="美国国债收益率：2Y / 10Y / 曲线斜率",
+        title=dict(text=f"美国国债收益率：2Y / 10Y / 曲线斜率（最近 {_n(lb)} 日）",
                    font=dict(color=MUTED, size=13)),
     )
     return fig
@@ -676,7 +716,7 @@ def chart_funding(data, lb, view):
     fig.update_xaxes(gridcolor="#1f2937")
     _style(fig)
     fig.update_layout(
-        title=dict(text="融资压力：SOFR / FRA-OIS 代理",
+        title=dict(text=f"融资压力：SOFR / FRA-OIS 代理（最近 {_n(lb)} 日）",
                    font=dict(color=MUTED, size=13)),
     )
 
@@ -774,9 +814,11 @@ def chart_vix(data, lb, mode):
 
     _style(fig)
     fig.update_layout(title=dict(
-        text={"散点回归":    "VIX 变化 vs DXY 变化（风险情绪驱动分析）",
-              "VIX时序":     "VIX 恐慌指数走势",
-              "Gold vs DXY": "黄金变化 vs DXY 变化（实际利率驱动分析）"}.get(mode, ""),
+        text={
+            "散点回归":    f"VIX 变化 vs DXY 变化（风险情绪驱动分析，最近 {_n(lb)} 日）",
+            "VIX时序":     f"VIX 恐慌指数走势（最近 {_n(lb)} 日）",
+            "Gold vs DXY": f"黄金变化 vs DXY 变化（实际利率驱动分析，最近 {_n(lb)} 日）",
+        }.get(mode, ""),
         font=dict(color=MUTED, size=13),
     ))
     return fig
@@ -839,8 +881,11 @@ def table_signals(data, lb, ols_win, sort_by):
     # Regime detail panel
     try:
         full_df  = _load(data, 4)
-        contribs, _, _ = rolling_ols_attribution(full_df, window=int(ols_win))
-        sig      = classify_regime(full_df, contribs)
+        ccy_attr = currency_attribution(full_df)
+        n_days   = _n(lb)
+        eff_win  = min(int(ols_win), max(n_days // 2, 10))
+        contribs, _, _ = rolling_ols_attribution(full_df, window=eff_win)
+        sig      = classify_regime(full_df, contribs, ccy_attr=ccy_attr)
         shares   = factor_share(contribs, window=10)
 
         bc_ = NEGATIVE if any(w in sig["regime"] for w in ("Stress","Risk-Off")) else (

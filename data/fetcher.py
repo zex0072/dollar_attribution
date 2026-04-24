@@ -4,12 +4,21 @@ All prices returned as daily close DataFrames indexed by date.
 """
 
 import os
+import ssl
 import logging
 from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
 import yfinance as yf
+
+try:
+    import certifi
+    ssl._create_default_https_context = lambda: ssl.create_default_context(
+        cafile=certifi.where()
+    )
+except ImportError:
+    pass
 
 from config import MARKET_TICKERS, FRED_SERIES, LOOKBACK_DAYS
 
