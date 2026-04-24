@@ -3,7 +3,7 @@ Dollar Volatility Attribution Model — configuration constants.
 """
 
 # ── Lookback & rolling window ─────────────────────────────────────────────────
-LOOKBACK_DAYS   = 365        # trading-day history to pull
+LOOKBACK_DAYS   = 800        # trading-day history to pull (~3 years)
 ROLLING_WINDOW  = 60         # rolling-OLS regression window (trading days)
 REFRESH_SECONDS = 300        # dashboard auto-refresh interval
 

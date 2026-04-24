@@ -51,7 +51,7 @@ POSITIVE = "#3fb950"
 NEGATIVE = "#f85149"
 WARNING  = "#d29922"
 
-LOOKBACK_OPTIONS = [30, 60, 90, 180, 252]
+LOOKBACK_OPTIONS = [30, 60, 90, 180, 252, 504, 756]
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
 
@@ -385,7 +385,7 @@ def update_kpis(data):
     if not data:
         return *["—"] * 12, "", "数据加载中…"
 
-    df = _load(data, lookback_idx=4)   # always use full history for KPIs
+    df = _load(data, lookback_idx=len(LOOKBACK_OPTIONS) - 1)   # always use full history for KPIs
 
     def _kpi(col, dec=2, rate=False):
         s = df[col].dropna()
